@@ -553,18 +553,14 @@
             try { arr = JSON.parse(decodeURIComponent(raw)); } catch (ee) { return; }
           }
           if (!Array.isArray(arr)) return;
-          const { added, updated, skipped } = importFromArray(arr);
+          const { added, updated } = importFromArray(arr);
           if (added || updated) {
             // atualiza tabela imediatamente
             renderTable();
-            // remove o parâmetro da URL para não reimportar em futuros reloads
-            try {
-              const u = new URL(window.location.href);
-              u.searchParams.delete('vagas');
-              history.replaceState(null, '', u.toString());
-            } catch (e) { console.error(e); }
-            // mostra notificação — sem recarregar a página
-            showToast(`Import automático: ${added} adicionada(s), ${updated} atualizada(s), ${skipped} ignorada(s)`);
+            // remove o parâmetro da URL e recarrega a página para não reimportar em futuros reloads
+            const u = new URL(window.location.href);
+            u.searchParams.delete('vagas');
+            window.location.replace(u.toString());
           }
         } catch (err) {
           console.error('Erro importando da URL', err);
