@@ -560,6 +560,7 @@
             // remove o parâmetro da URL e recarrega a página para não reimportar em futuros reloads
             const u = new URL(window.location.href);
             u.searchParams.delete('vagas');
+            console.log(u.toString())
             window.location.replace(u.toString());
           }
         } catch (err) {
