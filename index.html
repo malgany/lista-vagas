@@ -819,6 +819,8 @@
 
       // Inicialização
       load();
+      // preenche o campo data com hoje se estiver vazio (inicial)
+      try { setDefaultDate(); } catch (e) { /* ignore */ }
       renderTable();
       tryImportFromUrl();
 
