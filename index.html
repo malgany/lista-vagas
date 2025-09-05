@@ -133,25 +133,8 @@
     }
     .link:hover { text-decoration: underline; }
 
-    /* Modal */
-    .modal-overlay {
-      position: fixed; inset: 0; background: rgba(0,0,0,.55);
-      display: none; align-items: center; justify-content: center; z-index: 50;
-      padding: 16px;
-    }
-    .modal-overlay.open { display: flex; }
-    .modal {
-      width: min(820px, 96vw);
-      background: #0f1530;
-      border: 1px solid rgba(255,255,255,.12);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-      padding: 18px;
-    }
-    .modal header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-    .modal h3 { margin: 0; font-size: 18px; }
-    .modal .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-    .modal textarea { width: 100%; min-height: 260px; }
+    /* Completed row */
+    tbody tr.completed td { color: var(--muted); opacity: 0.6; }
 
     /* Toast */
     .toast-area { position: fixed; bottom: 18px; right: 18px; display: grid; gap: 8px; z-index: 60; }
@@ -175,8 +158,7 @@
     <div class="header">
       <h1>Controle de Vagas</h1>
       <div class="toolbar">
-        <button id="btnExport" class="btn-secondary" title="Exportar JSON">Exportar</button>
-        <button id="btnImport" class="btn-ghost" title="Importar JSON">Importar</button>
+        <button id="btnCopyLink" class="btn-secondary" title="Copiar link com os dados">Copiar link</button>
       </div>
     </div>
 
@@ -207,39 +189,11 @@
             <th data-col="empresa">EMPRESA <span class="sort-indicator" aria-hidden>▾</span></th>
             <th data-col="link">LINK</th>
             <th data-col="data">DATA</th>
+            <th>CONCLUÍDO</th>
           </tr>
         </thead>
         <tbody id="tbody"></tbody>
       </table>
-    </div>
-  </div>
-
-  <!-- Modal Exportar -->
-  <div id="exportOverlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="exportTitle">
-    <div class="modal">
-      <header>
-        <h3 id="exportTitle">Exportar dados (JSON)</h3>
-        <div class="actions">
-          <button id="btnCopy" class="btn-secondary" type="button">Copiar</button>
-          <button id="btnDownload" type="button">Baixar JSON</button>
-          <button id="btnCloseExport" class="btn-ghost" type="button">Fechar</button>
-        </div>
-      </header>
-      <textarea id="exportText" readonly spellcheck="false"></textarea>
-    </div>
-  </div>
-
-  <!-- Modal Importar -->
-  <div id="importOverlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="importTitle">
-    <div class="modal">
-      <header>
-        <h3 id="importTitle">Importar dados (JSON)</h3>
-        <div class="actions">
-          <button id="btnLoad" class="btn-secondary" type="button">Carregar</button>
-          <button id="btnCloseImport" class="btn-ghost" type="button">Cancelar</button>
-        </div>
-      </header>
-      <textarea id="importText" placeholder='Cole aqui um array de objetos no formato [{"empresa":"...","link":"...","data":"YYYY-MM-DD"}, ...]'></textarea>
     </div>
   </div>
 
@@ -248,9 +202,10 @@
   <script>
     (function() {
       const STORAGE_KEY = 'vagasDataV1';
-      /** @type {{empresa:string, link:string, data:string}[]} */
+      /** @type {{empresa:string, link:string, data:string, concluido?:boolean}[]} */
       let vagas = [];
-      let sortState = { col: 'empresa', dir: 'asc' };
+      // sortState.col === null -> keep insertion order (after partition by concluido)
+      let sortState = { col: null, dir: 'asc' };
 
       const form = document.getElementById('vagaForm');
       const empresaEl = document.getElementById('empresa');
@@ -258,19 +213,7 @@
       const dataEl = document.getElementById('data');
       const tbody = document.getElementById('tbody');
       const thead = document.querySelector('#tabela thead');
-
-      const exportOverlay = document.getElementById('exportOverlay');
-      const exportText = document.getElementById('exportText');
-      const btnExport = document.getElementById('btnExport');
-      const btnCopy = document.getElementById('btnCopy');
-      const btnDownload = document.getElementById('btnDownload');
-      const btnCloseExport = document.getElementById('btnCloseExport');
-
-      const importOverlay = document.getElementById('importOverlay');
-      const importText = document.getElementById('importText');
-      const btnImport = document.getElementById('btnImport');
-      const btnLoad = document.getElementById('btnLoad');
-      const btnCloseImport = document.getElementById('btnCloseImport');
+      const btnCopyLink = document.getElementById('btnCopyLink');
 
       function showToast(msg, type = 'ok') {
         const area = document.getElementById('toasts');
@@ -289,9 +232,10 @@
         try {
           const raw = localStorage.getItem(STORAGE_KEY);
           vagas = raw ? JSON.parse(raw) : [];
-          // normalizar datas para YYYY-MM-DD
+          // normalizar datas para YYYY-MM-DD and ensure 'concluido'
           for (const v of vagas) {
             if (v.data && v.data.includes('/')) v.data = toISODate(v.data);
+            if (typeof v.concluido !== 'boolean') v.concluido = false;
           }
         } catch (e) {
           console.error(e);
@@ -334,26 +278,60 @@
         }
       }
 
+      function importFromArray(arr) {
+        // arr: array of objects {empresa,link,data,concluido}
+        let added = 0, updated = 0, skipped = 0;
+        for (const raw of arr) {
+          if (!raw || typeof raw !== 'object') { skipped++; continue; }
+          const empresa = sanitize(raw.empresa);
+          const link = sanitize(raw.link);
+          let dt = sanitize(raw.data);
+          dt = toISODate(dt);
+          const concluido = raw.concluido === true || raw.concluido === 'true';
+          if (!empresa || !link || !dt || !isValidUrl(link)) { skipped++; continue; }
+          const idx = vagas.findIndex(v => v.link === link);
+          if (idx === -1) {
+            vagas.push({ empresa, link, data: dt, concluido });
+            added++;
+          } else {
+            const existing = vagas[idx];
+            // compare fields, update only if different
+            if (existing.empresa !== empresa || existing.data !== dt || !!existing.concluido !== !!concluido) {
+              vagas[idx] = { empresa, link, data: dt, concluido };
+              updated++;
+            } // else identical -> skip
+          }
+        }
+        if (added || updated) save();
+        return { added, updated, skipped };
+      }
+
       function renderTable() {
-        // ordenar conforme estado
-        const sorted = [...vagas].sort((a,b) => {
+        // map com índice para preservar ordem de inserção quando necessário
+        const withIndex = vagas.map((v, i) => ({ ...v, __idx: i }));
+
+        const sorted = withIndex.sort((a,b) => {
+          // sempre não concluídos primeiro
+          if ((a.concluido || false) !== (b.concluido || false)) return a.concluido ? 1 : -1;
+
+          // se não há coluna de ordenação escolhida, manter ordem de inserção
+          if (!sortState.col) return a.__idx - b.__idx;
+
           const col = sortState.col;
           let av = a[col] || '', bv = b[col] || '';
-          if (col === 'data') { // comparar por data ISO
-            av = a.data || '';
-            bv = b.data || '';
-          } else {
-            av = av.toString().toLowerCase();
-            bv = bv.toString().toLowerCase();
-          }
+          if (col === 'data') { av = a.data || ''; bv = b.data || ''; }
+          else { av = av.toString().toLowerCase(); bv = bv.toString().toLowerCase(); }
+
           if (av < bv) return sortState.dir === 'asc' ? -1 : 1;
           if (av > bv) return sortState.dir === 'asc' ? 1 : -1;
-          return 0;
+          return a.__idx - b.__idx;
         });
 
         tbody.innerHTML = '';
         for (const v of sorted) {
           const tr = document.createElement('tr');
+          if (v.concluido) tr.classList.add('completed');
+
           const tdEmpresa = document.createElement('td');
           tdEmpresa.textContent = v.empresa;
 
@@ -366,9 +344,25 @@
           const tdData = document.createElement('td');
           tdData.textContent = toDisplayDate(v.data);
 
+          const tdConcluido = document.createElement('td');
+          const chk = document.createElement('input');
+          chk.type = 'checkbox';
+          chk.checked = !!v.concluido;
+          chk.addEventListener('change', () => {
+            // atualizar campo e salvar
+            const origIdx = vagas.findIndex(x => x.link === v.link);
+            if (origIdx >= 0) {
+              vagas[origIdx].concluido = chk.checked;
+              save();
+              renderTable();
+            }
+          });
+          tdConcluido.appendChild(chk);
+
           tr.appendChild(tdEmpresa);
           tr.appendChild(tdLink);
           tr.appendChild(tdData);
+          tr.appendChild(tdConcluido);
           tbody.appendChild(tr);
         }
 
@@ -376,87 +370,13 @@
         document.querySelectorAll('thead th').forEach(th => {
           const ind = th.querySelector('.sort-indicator') || document.createElement('span');
           ind.className = 'sort-indicator';
-          if (th.dataset.col === sortState.col) {
+          if (th.dataset.col && th.dataset.col === sortState.col) {
             ind.textContent = sortState.dir === 'asc' ? '▴' : '▾';
           } else {
             ind.textContent = '';
           }
-          if (!th.querySelector('.sort-indicator')) th.appendChild(ind);
+          if (th.dataset.col && !th.querySelector('.sort-indicator')) th.appendChild(ind);
         });
-      }
-
-      function openExport() {
-        exportText.value = JSON.stringify(vagas, null, 2);
-        exportOverlay.classList.add('open');
-        exportText.focus();
-        exportText.select();
-      }
-
-      function copyExport() {
-        const txt = exportText.value;
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(txt).then(() => showToast('JSON copiado!')).catch(() => fallbackCopy());
-        } else {
-          fallbackCopy();
-        }
-        function fallbackCopy() {
-          exportText.focus();
-          exportText.select();
-          const ok = document.execCommand('copy');
-          showToast(ok ? 'JSON copiado!' : 'Não foi possível copiar', ok ? 'ok' : 'error');
-        }
-      }
-
-      function downloadExport() {
-        try {
-          const blob = new Blob([exportText.value], { type: 'application/json;charset=utf-8' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url; a.download = 'vagas.json';
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          URL.revokeObjectURL(url);
-          showToast('Download iniciado');
-        } catch (e) {
-          console.error(e);
-          showToast('Falha ao iniciar download', 'error');
-        }
-      }
-
-      function openImport() {
-        importText.value = '';
-        importOverlay.classList.add('open');
-        importText.focus();
-      }
-
-      function doImport() {
-        let data;
-        try {
-          data = JSON.parse(importText.value);
-        } catch (e) {
-          showToast('JSON inválido', 'error');
-          return;
-        }
-        if (!Array.isArray(data)) {
-          showToast('Esperado um array de objetos', 'error');
-          return;
-        }
-        let added = 0, replaced = 0, skipped = 0;
-        for (const raw of data) {
-          if (!raw || typeof raw !== 'object') { skipped++; continue; }
-          const empresa = sanitize(raw.empresa);
-          const link = sanitize(raw.link);
-          let dt = sanitize(raw.data);
-          dt = toISODate(dt);
-          if (!empresa || !link || !dt || !isValidUrl(link)) { skipped++; continue; }
-          const res = addOrUpdate({ empresa, link, data: dt });
-          if (res === 'added') added++; else replaced++;
-        }
-        save();
-        renderTable();
-        importOverlay.classList.remove('open');
-        showToast(`Importação concluída — ${added} adicionada(s), ${replaced} substituída(s), ${skipped} ignorada(s)`);
       }
 
       // Eventos
@@ -468,7 +388,7 @@
         if (!empresa) { showToast('Informe o nome da empresa', 'error'); empresaEl.focus(); return; }
         if (!isValidUrl(link)) { showToast('Link inválido', 'error'); linkEl.focus(); return; }
         if (!data) { showToast('Informe a data', 'error'); dataEl.focus(); return; }
-        const res = addOrUpdate({ empresa, link, data });
+        const res = addOrUpdate({ empresa, link, data, concluido: false });
         save();
         renderTable();
         form.reset();
@@ -480,7 +400,7 @@
         const th = e.target.closest('th');
         if (!th) return;
         const col = th.dataset.col;
-        if (!col) return;
+        if (!col) return; // coluna 'CONCLUÍDO' não ordena por clique
         if (sortState.col === col) {
           sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
         } else {
@@ -489,26 +409,82 @@
         renderTable();
       });
 
-      btnExport.addEventListener('click', openExport);
-      btnCopy.addEventListener('click', copyExport);
-      btnDownload.addEventListener('click', downloadExport);
-      btnCloseExport.addEventListener('click', () => exportOverlay.classList.remove('open'));
-      exportOverlay.addEventListener('click', (e) => { if (e.target === exportOverlay) exportOverlay.classList.remove('open'); });
+      // construir link compartilhável e copiar
+      function buildShareUrl() {
+        const base = 'https://malgany.github.io/lista-vagas';
+        if (!vagas || vagas.length === 0) return base;
+        // compactar apenas os campos necessários
+        const payload = vagas.map(v => ({ empresa: v.empresa, link: v.link, data: v.data, concluido: !!v.concluido }));
+        const encoded = encodeURIComponent(JSON.stringify(payload));
+        return `${base}?vagas=${encoded}`;
+      }
 
-      btnImport.addEventListener('click', openImport);
-      btnLoad.addEventListener('click', doImport);
-      btnCloseImport.addEventListener('click', () => importOverlay.classList.remove('open'));
-      importOverlay.addEventListener('click', (e) => { if (e.target === importOverlay) importOverlay.classList.remove('open'); });
+      // Use fallback copy method only (avoid Clipboard API which may be blocked by permissions)
+      btnCopyLink.addEventListener('click', () => {
+        if (!vagas || vagas.length === 0) { showToast('Nada para copiar (sem vagas).', 'error'); return; }
+        const url = buildShareUrl();
+        try {
+          const ta = document.createElement('textarea');
+          // keep textarea offscreen but selectable
+          ta.value = url;
+          ta.setAttribute('readonly', '');
+          ta.style.position = 'absolute';
+          ta.style.left = '-9999px';
+          ta.style.top = '0';
+          document.body.appendChild(ta);
+
+          // select the text
+          ta.focus();
+          ta.select();
+          ta.setSelectionRange(0, ta.value.length);
+
+          const ok = document.execCommand('copy');
+          document.body.removeChild(ta);
+
+          if (ok) {
+            showToast('Link copiado para a área de transferência!');
+          } else {
+            // execCommand can return false in some browsers
+            showToast('Não foi possível copiar automaticamente. Selecione e copie manualmente.', 'error');
+          }
+        } catch (e) {
+          console.error('Copy fallback failed', e);
+          showToast('Falha ao copiar o link. Copie manualmente: ' + url, 'error');
+        }
+      });
+
+      // importar automaticamente se houver param ?vagas=...
+      function tryImportFromUrl() {
+        try {
+          const params = new URLSearchParams(window.location.search);
+          if (!params.has('vagas')) return;
+          const raw = params.get('vagas');
+          if (!raw) return;
+          let arr;
+          try { arr = JSON.parse(raw); } catch (e) {
+            // talvez esteja percent-encoded
+            try { arr = JSON.parse(decodeURIComponent(raw)); } catch (ee) { return; }
+          }
+          if (!Array.isArray(arr)) return;
+          const { added, updated, skipped } = importFromArray(arr);
+          if (added || updated) {
+            renderTable();
+            showToast(`Import automático: ${added} adicionada(s), ${updated} atualizada(s), ${skipped} ignorada(s)`);
+          }
+        } catch (e) {
+          console.error('Erro importando da URL', e);
+        }
+      }
 
       // Inicialização
       load();
       renderTable();
+      tryImportFromUrl();
 
-      // Atalhos: ESC fecha modais
+      // Atalhos: ESC fecha modais (não há modais agora, mas deixo como segurança)
       window.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
-          exportOverlay.classList.remove('open');
-          importOverlay.classList.remove('open');
+          // nada para fechar
         }
       });
     })();
