@@ -25,6 +25,21 @@
       color: var(--text);
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
+
+      /* default: prevent text selection in non-interactive areas */
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+      user-select: none;
+    }
+
+    /* Re-enable selection & pointer for interactive elements */
+    input, textarea, button, a, td[data-col], input[type="checkbox"], #vagaForm, #vagaForm * {
+      -webkit-user-select: text !important;
+      -moz-user-select: text !important;
+      -ms-user-select: text !important;
+      user-select: text !important;
+      cursor: auto;
     }
 
     .container {
@@ -145,7 +160,7 @@
 
     /* Editable cell styles */
     td.editing { padding: 10px; }
-    td .inline-edit { width:100%; height:36px; box-sizing:border-box; border-radius:8px; padding:6px 10px; background:#0b1228; color:var(--text); border:1px solid rgba(255,255,255,.06); }
+    td .inline-edit { display:block; width:100%; height:36px; box-sizing:border-box; border-radius:8px; padding:6px 10px; background:#0b1228; color:var(--text); border:1px solid rgba(255,255,255,.06); }
 
     td:focus { outline: 2px solid rgba(96,165,250,.14); outline-offset: -2px; }
 
@@ -243,6 +258,17 @@
       const tbody = document.getElementById('tbody');
       const thead = document.querySelector('#tabela thead');
       const btnCopyLink = document.getElementById('btnCopyLink');
+
+      // define default date behavior: prefill form date with today if empty
+      function setDefaultDate() {
+        try {
+          const today = new Date();
+          const y = today.getFullYear();
+          const m = String(today.getMonth() + 1).padStart(2, '0');
+          const d = String(today.getDate()).padStart(2, '0');
+          if (!dataEl.value) dataEl.value = `${y}-${m}-${d}`;
+        } catch (e) { /* ignore */ }
+      }
 
       function showToast(msg, type = 'ok') {
         const area = document.getElementById('toasts');
@@ -361,10 +387,25 @@
         else el.focus();
       }
 
+      // close any active inline edit (commit) to avoid multiple inputs/caret leakage
+      function closeActiveEdit() {
+        const activeTd = tbody.querySelector('td.editing');
+        if (!activeTd) return;
+        const input = activeTd.querySelector('.inline-edit');
+        if (input) {
+          try { commitEdit(input, activeTd); } catch (e) { activeTd.classList.remove('editing'); renderTable(); }
+        } else {
+          activeTd.classList.remove('editing');
+        }
+      }
+
       function enterEdit(td) {
         if (!td || td.classList.contains('editing')) return;
         const col = td.dataset.col;
         if (!col) return;
+
+        // close any other active edit first
+        closeActiveEdit();
 
         // store anchor href before clearing
         let anchorHref = null;
@@ -379,7 +420,6 @@
         if (col === 'data') {
           input = document.createElement('input');
           input.type = 'date';
-          // orig may be dd/mm/yyyy -> convert to ISO
           const iso = toISODate(orig) || anchorHref || '';
           input.value = iso || '';
         } else if (col === 'link') {
@@ -392,12 +432,22 @@
           input.value = orig;
         }
         input.className = 'inline-edit';
+        // ensure input won't visually overflow or move layout
+        input.style.display = 'block';
+        input.style.minWidth = '0';
         td.appendChild(input);
-        input.focus();
-        input.select();
+
+        // focus/selection deferred to next frame to avoid layout thrash
+        requestAnimationFrame(() => {
+          input.focus();
+          try { input.select(); } catch (e) {}
+        });
 
         // handlers
-        input.addEventListener('blur', () => commitEdit(input, td));
+        input.addEventListener('blur', () => {
+          // small timeout to allow related clicks (eg. Cancel button) before committing
+          setTimeout(() => { if (document.activeElement === input) return; commitEdit(input, td); }, 0);
+        });
 
         input.addEventListener('keydown', (ev) => {
           if (ev.key === 'Enter') {
@@ -452,15 +502,17 @@
         save();
         renderTable();
 
-        // after render, focus desired element by index if valid
+        // after render, focus desired element by index if valid. Use setTimeout to ensure DOM updates are applied.
         if (typeof targetIndex === 'number') {
-          const seqAfter = getFocusableSequence();
-          if (targetIndex >= 0 && targetIndex < seqAfter.length) {
-            const el = seqAfter[targetIndex];
-            // if td -> start edit
-            if (el && el.tagName === 'TD') enterEdit(el);
-            else focusElement(el);
-          }
+          setTimeout(() => {
+            const seqAfter = getFocusableSequence();
+            if (targetIndex >= 0 && targetIndex < seqAfter.length) {
+              const el = seqAfter[targetIndex];
+              // if td -> start edit
+              if (el && el.tagName === 'TD') enterEdit(el);
+              else focusElement(el);
+            }
+          }, 0);
         }
       }
 
@@ -478,6 +530,10 @@
           if (av > bv) return sortState.dir === 'asc' ? 1 : -1;
           return a.__idx - b.__idx;
         });
+
+        // close any stray edits before re-render
+        const active = tbody.querySelector('td.editing');
+        if (active) active.classList.remove('editing');
 
         tbody.innerHTML = '';
         for (const v of sorted) {
@@ -541,6 +597,7 @@
             btnCancel.textContent = 'Cancelar';
             pop.appendChild(p);
             pop.appendChild(btnCancel);
+
             tr.appendChild(pop);
 
             // animate open
@@ -623,6 +680,30 @@
         }
       });
 
+      // disable clicks/selection/drag on non-interactive areas
+      (function blockNonInteractive() {
+        const allowSelector = 'input, textarea, button, a, td[data-col], input[type="checkbox"], #vagaForm *';
+        // prevent mouse clicks on everything that is not allowed
+        document.addEventListener('click', (e) => {
+          if (e.target.closest && e.target.closest(allowSelector)) return;
+          // allow right-click context menu, but prevent accidental selections/clicks
+          e.preventDefault();
+          e.stopPropagation();
+        }, true);
+
+        // prevent text selection start outside allowed
+        document.addEventListener('selectstart', (e) => {
+          if (e.target.closest && e.target.closest(allowSelector)) return;
+          e.preventDefault();
+        }, true);
+
+        // prevent dragging items (images/links) outside allowed
+        document.addEventListener('dragstart', (e) => {
+          if (e.target.closest && e.target.closest(allowSelector)) return;
+          e.preventDefault();
+        }, true);
+      })();
+
       // keyboard navigation helpers
       document.addEventListener('keydown', (e) => {
         // if an INPUT inline exists and is focused, let it handle keys
@@ -646,6 +727,7 @@
         save();
         renderTable();
         form.reset();
+        setDefaultDate();
         empresaEl.focus();
         showToast(res === 'added' ? 'Vaga incluída' : 'Vaga atualizada');
       });
@@ -719,11 +801,19 @@
           if (!Array.isArray(arr)) return;
           const { added, updated, skipped } = importFromArray(arr);
           if (added || updated) {
+            // atualiza tabela imediatamente
             renderTable();
+            // remove o parâmetro da URL para não reimportar em futuros reloads
+            try {
+              const u = new URL(window.location.href);
+              u.searchParams.delete('vagas');
+              history.replaceState(null, '', u.toString());
+            } catch (e) { console.error(e); }
+            // mostra notificação — sem recarregar a página
             showToast(`Import automático: ${added} adicionada(s), ${updated} atualizada(s), ${skipped} ignorada(s)`);
           }
-        } catch (e) {
-          console.error('Erro importando da URL', e);
+        } catch (err) {
+          console.error('Erro importando da URL', err);
         }
       }
 
