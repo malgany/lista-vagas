@@ -561,6 +561,7 @@
             const u = new URL(window.location.href);
             u.searchParams.delete('vagas');
             history.replaceState(null, '', u.toString());
+            window.location = '.'
           }
         } catch (err) {
           console.error('Erro importando da URL', err);
