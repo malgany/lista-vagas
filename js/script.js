@@ -562,6 +562,12 @@
             u.searchParams.delete('vagas');
             console.log(u.toString())
             window.location.replace(u.toString());
+
+            const titleEl = document.getElementById('pageTitle');
+            if (titleEl) {
+              const anchor = titleEl.querySelector('a');
+              if (anchor) anchor.click();
+            }
           }
         } catch (err) {
           console.error('Erro importando da URL', err);
