@@ -557,17 +557,10 @@
           if (added || updated) {
             // atualiza tabela imediatamente
             renderTable();
-            // remove o parâmetro da URL e recarrega a página para não reimportar em futuros reloads
+            // remove o parâmetro da URL sem recarregar a página
             const u = new URL(window.location.href);
             u.searchParams.delete('vagas');
-            console.log(u.toString())
-            window.location.replace(u.toString());
-
-            const titleEl = document.getElementById('pageTitle');
-            if (titleEl) {
-              const anchor = titleEl.querySelector('a');
-              if (anchor) anchor.click();
-            }
+            history.replaceState(null, '', u.toString());
           }
         } catch (err) {
           console.error('Erro importando da URL', err);
